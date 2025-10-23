@@ -55,6 +55,10 @@ class Predictor(BasePredictor):
         logging.info(f"Input video exists: {os.path.exists(input_video)}")
         logging.info(f"Input video file size: {os.path.getsize(input_video)} bytes")
 
+        # Detect the original video's frame rate
+        fps = self.get_video_fps(input_video)
+        logging.info(f"Detected video FPS: {fps}")
+
         try:
             ffmpeg_cmd = [
                 "ffmpeg", "-i", str(input_video), "-q:v", "2", "-start_number", "0",
@@ -142,16 +146,18 @@ class Predictor(BasePredictor):
             cv2.imwrite(output_frame_path, frame_with_bg_removed)
             frame_count += 1
 
+        output_video_no_audio = '/output_no_audio.mp4'
         output_video_path = '/output.mp4'
 
         try:
+            # Create video with detected FPS
             final_video_cmd = [
                 "ffmpeg", "-y",  # Add -y flag to force overwrite without prompting
-                "-framerate", "30",
+                "-framerate", str(fps),  # Use detected FPS instead of hardcoded value
                 "-i", f"{output_frames_dir}/%05d.jpg",
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
-                output_video_path
+                output_video_no_audio
             ]
             logging.info(f"Running final FFmpeg command: {' '.join(final_video_cmd)}")
 
@@ -163,10 +169,63 @@ class Predictor(BasePredictor):
             logging.error(f"Error creating final video: {e.stderr}")
             raise RuntimeError(f"Failed to create final video: {e.stderr}")
 
+        # Add audio from original video if it exists
+        try:
+            audio_merge_cmd = [
+                "ffmpeg", "-y",
+                "-i", output_video_no_audio,
+                "-i", str(input_video),
+                "-c:v", "copy",  # Copy video stream without re-encoding
+                "-c:a", "aac",  # Encode audio as AAC
+                "-map", "0:v:0",  # Take video from first input
+                "-map", "1:a:0?",  # Take audio from second input (if exists, ? makes it optional)
+                "-shortest",  # Finish when shortest stream ends
+                output_video_path
+            ]
+            logging.info(f"Merging audio: {' '.join(audio_merge_cmd)}")
+
+            result = subprocess.run(audio_merge_cmd, capture_output=True, text=True, check=True)
+            logging.info("Audio merged successfully")
+            logging.debug(f"Audio merge stdout: {result.stdout}")
+            logging.debug(f"Audio merge stderr: {result.stderr}")
+        except subprocess.CalledProcessError as e:
+            logging.warning(f"Could not merge audio (video may not have audio): {e.stderr}")
+            # If audio merge fails, use the video without audio
+            shutil.copy(output_video_no_audio, output_video_path)
+
         logging.info(f"Processed {frame_count} frames")
         logging.info(f"Background removed video saved as {output_video_path}")
 
         return Path(output_video_path)
+
+    def get_video_fps(self, video_path):
+        """
+        Detect the frame rate of a video using ffprobe.
+        Returns the FPS as a float.
+        """
+        try:
+            ffprobe_cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=r_frame_rate",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path)
+            ]
+            result = subprocess.run(ffprobe_cmd, capture_output=True, text=True, check=True)
+            fps_fraction = result.stdout.strip()
+            
+            # Parse fraction (e.g., "30000/1001" or "30/1")
+            if '/' in fps_fraction:
+                numerator, denominator = map(float, fps_fraction.split('/'))
+                fps = numerator / denominator
+            else:
+                fps = float(fps_fraction)
+            
+            logging.info(f"Detected FPS: {fps}")
+            return fps
+        except Exception as e:
+            logging.warning(f"Could not detect FPS, defaulting to 25: {e}")
+            return 25.0  # Default fallback
 
     def detect_body_keypoints(self, frame):
         # Convert BGR to RGB
