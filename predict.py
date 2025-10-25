@@ -146,18 +146,21 @@ class Predictor(BasePredictor):
             cv2.imwrite(output_frame_path, frame_with_bg_removed)
             frame_count += 1
 
-        output_video_no_audio = '/output_no_audio.mp4'
         output_video_path = '/output.mp4'
 
         try:
-            # Create video with detected FPS
             final_video_cmd = [
                 "ffmpeg", "-y",  # Add -y flag to force overwrite without prompting
-                "-framerate", str(fps),  # Use detected FPS instead of hardcoded value
+                "-framerate", str(fps),  # Use detected FPS from the original video
                 "-i", f"{output_frames_dir}/%05d.jpg",
+                "-i", str(input_video),  # Include original video for audio
                 "-c:v", "libx264",
+                "-c:a", "copy",  # Copy audio from original video
+                "-map", "0:v:0",  # Video from processed frames
+                "-map", "1:a:0?",  # Audio from original (? makes it optional)
                 "-pix_fmt", "yuv420p",
-                output_video_no_audio
+                "-shortest",  # Match duration to shortest stream
+                output_video_path
             ]
             logging.info(f"Running final FFmpeg command: {' '.join(final_video_cmd)}")
 
@@ -168,30 +171,6 @@ class Predictor(BasePredictor):
         except subprocess.CalledProcessError as e:
             logging.error(f"Error creating final video: {e.stderr}")
             raise RuntimeError(f"Failed to create final video: {e.stderr}")
-
-        # Add audio from original video if it exists
-        try:
-            audio_merge_cmd = [
-                "ffmpeg", "-y",
-                "-i", output_video_no_audio,
-                "-i", str(input_video),
-                "-c:v", "copy",  # Copy video stream without re-encoding
-                "-c:a", "aac",  # Encode audio as AAC
-                "-map", "0:v:0",  # Take video from first input
-                "-map", "1:a:0?",  # Take audio from second input (if exists, ? makes it optional)
-                "-shortest",  # Finish when shortest stream ends
-                output_video_path
-            ]
-            logging.info(f"Merging audio: {' '.join(audio_merge_cmd)}")
-
-            result = subprocess.run(audio_merge_cmd, capture_output=True, text=True, check=True)
-            logging.info("Audio merged successfully")
-            logging.debug(f"Audio merge stdout: {result.stdout}")
-            logging.debug(f"Audio merge stderr: {result.stderr}")
-        except subprocess.CalledProcessError as e:
-            logging.warning(f"Could not merge audio (video may not have audio): {e.stderr}")
-            # If audio merge fails, use the video without audio
-            shutil.copy(output_video_no_audio, output_video_path)
 
         logging.info(f"Processed {frame_count} frames")
         logging.info(f"Background removed video saved as {output_video_path}")
