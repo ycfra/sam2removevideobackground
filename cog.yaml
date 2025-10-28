@@ -23,5 +23,7 @@ build:
       onnxruntime-gpu==1.15.0 onnx==1.14.0
     # Layer 4: Model and config download
     - wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt -O /sam2_hiera_large.pt
+    # Layer 5: Clean cache and temporary files to reduce image size
+    - rm -rf /root/.cache/pip /tmp/* /var/tmp/* /root/.cache/*
 
 predict: 'predict.py:Predictor'
